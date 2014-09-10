@@ -128,12 +128,12 @@ void check_temp(){
   Serial.println(tempC);
 }
 
-void test_light(){
+void test_temp(){
   Serial.print("temp calibrationV: ");
   Serial.println(map(analogRead(TEMPERATURE_CALIBRATION_PIN), 0, 1023, 20, 40));
-  
-  
-  
+}
+
+void test_light(){
   ldrValue = analogRead(LDR_PIN);
   calibrationValue = analogRead(CALIBRATION_PIN);
   Serial.print("LDR: ");
@@ -227,6 +227,7 @@ void setup(){
 
 void loop(){
   test_light();
+  test_temp();
   
   endstopBottomState = endstopBottom.read();
   endstopTopState = endstopTop.read();
@@ -239,4 +240,3 @@ void loop(){
   
   Alarm.delay(500);
 }
-
