@@ -1,5 +1,3 @@
-// TODO afstellen van temperatuur via 
-
 #include <OneWire.h>
 #include <DallasTemperature.h>
 #include <Time.h>
