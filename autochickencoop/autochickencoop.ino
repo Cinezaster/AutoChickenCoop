@@ -3,7 +3,7 @@
  * DESCRIPTION:  Chicken Coop controller. Closes the door at the evening and opens it up in the morning
  *               also prevents that the coop gets to hot.
  * AUTHOR: Toon Nelissen
- * GITHUB: 
+ * GITHUB: https://github.com/Cinezaster/AutoChickenCoop
  */
 
 #include <OneWire.h> // dependency for DallasTemperature lib
@@ -18,11 +18,11 @@
 #define TEMPERATURE_THRESHOLD_PIN A3 //potentiometer to set the ventilation threshold
 #define VENTILATION_PIN 2 // Ventilator
 #define LIGHT_PIN 3 // Led string
-#define DOOR_THRESHOLD_LED_PIN 13 //TODO change back to 4 later
+#define DOOR_THRESHOLD_LED_PIN 4 //TODO change back to 4 later
 #define ONE_WIRE_BUS 5 // pin to connect the Dallas oneWire temperature sensor
-#define ENDSTOP_BOTTOM_PIN 6 // switch HIGH when active (closed position)
+#define ENDSTOP_BOTTOM_PIN 8// switch HIGH when active (closed position)
 #define ENDSTOP_TOP_PIN 7 // switch HIGH when active (closed position)
-#define MOTOR_PWM_PIN 8 // PowerFet BUK456 gate to control speed of motor
+#define MOTOR_PWM_PIN 6 // PowerFet BUK456 gate to control speed of motor
 #define MOTOR_1A_PIN 9 // 1A of SN754410 
 #define MOTOR_2A_PIN 10 // 2A of SN754410
 #define MOTOR_EN_PIN 11 // EN of SN754410
@@ -112,7 +112,6 @@ void check_light(){
       light_on();
       ticker = 0;
     }
-    
   } else if (ldrValue > doorThresholdValue && endstopBottomState == HIGH) {
     if (ticker < transitionTime*2) {
       ticker++;
@@ -248,21 +247,42 @@ void door_close(){
   stop_motor();
 }
 
+/**
+ * start the motor
+ * @variable : direction "open"/"close"
+ */
 void start_motor(const char* direction){
+  
+  if (DEBUG) {
+    Serial.print("Going to start the motor. Direction: ");
+    Serial.println(direction);
+  }
+
   enable_motor();
   set_motor_speed(255);
   set_motor_direction(direction);
 }
 
+/**
+ * stop the motor
+ */
 void stop_motor() {
   disable_motor();
   set_motor_speed(0);
 }
 
+/**
+ * set motor speed 
+ * @variable : speed (0 to 255)
+ */
 void set_motor_speed(int speed) {
   analogWrite(MOTOR_PWM_PIN, speed);
 }
 
+/**
+ * set motor direction
+ * @variable : direction "open"/"close"
+ */
 void set_motor_direction(const char* direction) {
   if (direction == "open") {
     digitalWrite(MOTOR_1A_PIN, HIGH);
@@ -271,21 +291,33 @@ void set_motor_direction(const char* direction) {
   }
 }
 
+/**
+ * What could this be?
+ */
 void enable_motor(){
   digitalWrite(MOTOR_EN_PIN, HIGH);
 }
 
+/**
+ * disable the motor
+ */
 void disable_motor(){
   digitalWrite(MOTOR_EN_PIN, LOW);
   digitalWrite(MOTOR_1A_PIN,LOW);
   digitalWrite(MOTOR_2A_PIN,LOW);
 }
 
+/**
+ * what is says 
+ */
 void set_endstop_states(){
   endstopBottomState = endstopBottom.read();
   endstopTopState = endstopTop.read();
 }
 
+/**
+ * toggles the door if open it closes visa versa
+ */
 void toggle_door(){
   // prevents that you toggle the door when it is moving and also takes care of the correct direction
   if (endstopTopState == LOW) {
@@ -295,6 +327,9 @@ void toggle_door(){
   }
 }
 
+/**
+ * If you don't know why this is here start with the blink sketch
+ */
 void setup(){
   Serial.begin(57600);
   
@@ -318,6 +353,10 @@ void setup(){
   Alarm.timerRepeat(30, check);
 }
 
+/**
+ * Lets do this rollercoaster
+ * Hopefully I'm not going to kill some chickens
+ */
 void loop(){
   test();
 
