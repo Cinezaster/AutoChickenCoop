@@ -1,46 +1,62 @@
-#include <OneWire.h>
-#include <DallasTemperature.h>
-#include <Time.h>
-#include <TimeAlarms.h>
-#include <Bounce2.h>
+/**
+ * PROJECT: Autochickencoop
+ * DESCRIPTION:  Chicken Coop controller. Closes the door at the evening and opens it up in the morning
+ *               also prevents that the coop gets to hot.
+ * AUTHOR: Toon Nelissen
+ * GITHUB: 
+ */
 
-#define LDR_PIN A0
-#define CALIBRATION_PIN A1
-#define TEMPERATURE_CALIBRATION_PIN A2
-#define VENTILATION_PIN 2
-#define LIGHT_PIN 3
-#define CALIBRATION_LED_PIN 13 // change back to 4 later
-#define ONE_WIRE_BUS 5
-#define ENDSTOP_BOTTOM_PIN 6
-#define ENDSTOP_TOP_PIN 7
-#define MOTOR_PWM_PIN 8
-#define MOTOR_1A_PIN 9
-#define MOTOR_2A_PIN 10
-#define MOTOR_EN_PIN 11
-#define TEST_BUTTON_PIN 12
+#include <OneWire.h> // dependency for DallasTemperature lib
+#include <DallasTemperature.h> // lib for Dallas OneWire sensor
+#include <Time.h> // library taking care of time (doesn't realy need it but it but it is a dependency for TimeAlarms
+#include <TimeAlarms.h> // library taking care of intervals 
+#include <Bounce2.h> // library taking care of debouncing of button 
 
-int calibrationValue;
-int temperatureCalibrationValue;
+#define LDR1_PIN A0 // LDR 
+#define LDR2_PIN A1 // LDR
+#define DOOR_THRESHOLD_PIN A2 //potentiometer to set the door open en door close threshold
+#define TEMPERATURE_THRESHOLD_PIN A3 //potentiometer to set the ventilation threshold
+#define VENTILATION_PIN 2 // Ventilator
+#define LIGHT_PIN 3 // Led string
+#define DOOR_THRESHOLD_LED_PIN 13 //TODO change back to 4 later
+#define ONE_WIRE_BUS 5 // pin to connect the Dallas oneWire temperature sensor
+#define ENDSTOP_BOTTOM_PIN 6 // switch HIGH when active (closed position)
+#define ENDSTOP_TOP_PIN 7 // switch HIGH when active (closed position)
+#define MOTOR_PWM_PIN 8 // PowerFet BUK456 gate to control speed of motor
+#define MOTOR_1A_PIN 9 // 1A of SN754410 
+#define MOTOR_2A_PIN 10 // 2A of SN754410
+#define MOTOR_EN_PIN 11 // EN of SN754410
+#define TEST_BUTTON_PIN 12 // pushButton
+
+#define DEBUG true // turn on Serial debug info
+
+int doorThresholdValue;
+int temperatureThresholdValue;
 int ldrValue;
-volatile int calibrationState;
+volatile int doorThresholdState;
 volatile int endstopBottomState;
 volatile int endstopTopState;
 int ticker;
 const int transitionTime = 5; // minutes check
-const int motorSpeed = 180;
+const int motorSpeed = 180; // 
 
-OneWire oneWire(ONE_WIRE_BUS);
-DallasTemperature sensors(&oneWire);
-DeviceAddress insideThermometer;
+OneWire oneWire(ONE_WIRE_BUS); // initiate  one wire
+DallasTemperature sensors(&oneWire); // make a dallas sensor of the one wire bus
+DeviceAddress insideThermometer; 
 
-Bounce testButton = Bounce();
+Bounce testButton = Bounce();  // initiate debounced button
 Bounce endstopBottom = Bounce();
 Bounce endstopTop = Bounce();
 
+
+/**
+ * initiate all input ports
+ */
 void init_input(){
-  pinMode(LDR_PIN, INPUT);
-  pinMode(CALIBRATION_PIN, INPUT);
-  pinMode(TEMPERATURE_CALIBRATION_PIN, INPUT);
+  pinMode(LDR1_PIN, INPUT);
+  pinMode(LDR2_PIN, INPUT);
+  pinMode(DOOR_THRESHOLD_PIN, INPUT);
+  pinMode(TEMPERATURE_THRESHOLD_PIN, INPUT);
   pinMode(ENDSTOP_BOTTOM_PIN, INPUT_PULLUP);
   endstopBottom.attach(ENDSTOP_BOTTOM_PIN);
   endstopBottom.interval(40);
@@ -52,16 +68,16 @@ void init_input(){
   testButton.interval(120);
 }
 
+/**
+ * initiate all output ports
+ */
 void init_output(){
   pinMode(VENTILATION_PIN, OUTPUT);
   digitalWrite(VENTILATION_PIN, LOW);
   pinMode(LIGHT_PIN, OUTPUT);
   digitalWrite(LIGHT_PIN, LOW);
-  pinMode(CALIBRATION_LED_PIN, OUTPUT);
-  digitalWrite(CALIBRATION_LED_PIN, LOW);
-}
-
-void init_motor(){
+  pinMode(DOOR_THRESHOLD_LED_PIN, OUTPUT);
+  digitalWrite(DOOR_THRESHOLD_LED_PIN, LOW);
   pinMode(MOTOR_1A_PIN,OUTPUT);
   digitalWrite(MOTOR_1A_PIN,LOW);
   pinMode(MOTOR_2A_PIN,OUTPUT);
@@ -72,46 +88,51 @@ void init_motor(){
   analogWrite(MOTOR_PWM_PIN,0);
 }
 
+/**
+ * Check check the light and the temperature situation
+ */
+void check(){
+   check_light();
+   check_temp();
+}
+  
+/**
+ * checking light conditions and acting if needed
+ */
 void check_light(){
-  // als donker vastgesteld en deur is nog steeds open ticker ++
-  if (ldrValue < calibrationValue && endstopTopState == LOW) {
-    if (ticker > transitionTime*2) {
-      // deur naar beneden
+  // when light intensity is below the threshold and door is open, ...
+  if (ldrValue < doorThresholdValue && endstopTopState == HIGH) {
+    // when ticker is smaller then the delay add 1 to ticker 
+    // and put light on to conditionate the chickens that the door is about to close :-)
+    if (ticker < transitionTime*2) {
+      ticker++;
+      light_on();
+    } else {
       door_close();
       light_on();
       ticker = 0;
-      
-    } else {
-      ticker++;
-      light_on();
     }
     
-  } else if (ldrValue > calibrationValue && endstopBottomState == LOW) {
-    if (ticker > transitionTime*2) {
-      // deur naar boven
+  } else if (ldrValue > doorThresholdValue && endstopBottomState == HIGH) {
+    if (ticker < transitionTime*2) {
+      ticker++;
+    } else {
       door_open();
       light_off();
       ticker = 0;
-    } else {
-      ticker++;
     }
   }
-  // als we al aan het tellen zijn en de voorwaarde voldoet niet meer ticker naar 0;
-  if (ticker > 0 && ldrValue > calibrationValue && endstopTopState == LOW || ticker > 0 && ldrValue < calibrationValue && endstopBottomState == LOW) {
+  
+  // this prevents that a temporary shadow on the sensor would trigger the doors and leave the ticker in a half way state
+  if (ticker > 0 && ldrValue > doorThresholdValue && endstopTopState == HIGH || ticker > 0 && ldrValue < doorThresholdValue && endstopBottomState == HIGH) {
     ticker--; // or 0?? check beheaviour 
   }
 }
 
+/**
+ * checking temperature and turns on the ventilation
+ */
 void check_temp(){
-  int prevTempCalV = temperatureCalibrationValue;
-  temperatureCalibrationValue = map(analogRead(TEMPERATURE_CALIBRATION_PIN), 0, 1023, 20, 40);
-  Serial.print("temp calibrationV: ");
-  Serial.println(temperatureCalibrationValue);
-  if (prevTempCalV != temperatureCalibrationValue) {
-    sensors.setHighAlarmTemp(insideThermometer, temperatureCalibrationValue);
-  }
-  
-  
   if (sensors.hasAlarm(insideThermometer) && analogRead(VENTILATION_PIN) == HIGH)
   {
     digitalWrite(VENTILATION_PIN, HIGH);
@@ -119,84 +140,154 @@ void check_temp(){
     digitalWrite(VENTILATION_PIN, LOW);
   }
   
-  Serial.print("Requesting temperatures...");
   sensors.requestTemperatures();
-  Serial.println("DONE");
   
   float tempC = sensors.getTempC(insideThermometer);
-  Serial.print("Temp C: ");
-  Serial.println(tempC);
-}
 
-void test_temp(){
-  Serial.print("temp calibrationV: ");
-  Serial.println(map(analogRead(TEMPERATURE_CALIBRATION_PIN), 0, 1023, 20, 40));
-}
-
-void test_light(){
-  ldrValue = analogRead(LDR_PIN);
-  calibrationValue = analogRead(CALIBRATION_PIN);
-  Serial.print("LDR: ");
-  Serial.println(ldrValue);
-  Serial.print("calibrationV: ");
-  Serial.println(calibrationValue);
-  
-  if (ldrValue < calibrationValue && calibrationState == LOW) {
-    calibrationState = HIGH;
-  } else {
-    calibrationState = LOW;
+  if (DEBUG) {
+    Serial.print("Temp C: ");
+    Serial.println(tempC);
   }
 }
 
-void check(){
-   check_light();
-   check_temp();
+void test(){
+  test_light();
+  test_temp();
 }
 
+/**
+ * Read temperature threshold
+ * If threshold has changed set the alarm on the temperature sensor
+ */
+void test_temp(){
+  int prevTempCalV = temperatureThresholdValue;
+  temperatureThresholdValue = map(analogRead(TEMPERATURE_THRESHOLD_PIN), 0, 1023, 20, 40);
+
+  if (prevTempCalV != temperatureThresholdValue) {
+    sensors.setHighAlarmTemp(insideThermometer, temperatureThresholdValue);
+  }
+
+  if (DEBUG) {
+    Serial.print("Temp threshold C: ");
+    Serial.println(temperatureThresholdValue);
+  }
+}
+
+/**
+ * Read LDR and threshold
+ * If LDR is lower then threshold turn doorThresholdState HIGH if already HIGH go low (blinks the LED);
+ */
+void test_light(){
+  set_ldr_value();
+  doorThresholdValue = analogRead(DOOR_THRESHOLD_PIN);
+  
+  if (ldrValue < doorThresholdValue && doorThresholdState == LOW) {
+    doorThresholdState = HIGH;
+  } else {
+    doorThresholdState = LOW;
+  }
+
+  if (DEBUG) {
+    Serial.print("LDR: ");
+    Serial.println(ldrValue);
+    Serial.print("thresholdV: ");
+    Serial.println(doorThresholdValue);
+  }
+}
+
+void set_ldr_value(){
+  // ldrValue = averaging 2 LDR sensor pointed at a different hemisphere Souht-East Souht-West
+  ldrValue = (analogRead(LDR1_PIN) + analogRead(LDR2_PIN))/2;
+}
+
+/**
+ * Light in coop ON
+ */
 void light_on(){
   digitalWrite(LIGHT_PIN,HIGH);
 }
 
+/**
+ * Light in coop OFF
+ */
 void light_off(){
   digitalWrite(LIGHT_PIN,LOW);
 }
 
+/**
+ * Open the Door
+ */
 void door_open(){
-  digitalWrite(MOTOR_EN_PIN, HIGH);
-  analogWrite(MOTOR_PWM_PIN, 255);
-  digitalWrite(MOTOR_1A_PIN,HIGH);
-  // een while op de deur sensors
-  while(digitalRead(ENDSTOP_TOP_PIN) == LOW) {
-    // als de deur vertrokken is het tempo verlage
-    if (digitalRead(ENDSTOP_BOTTOM_PIN) == LOW) {
-      analogWrite(MOTOR_PWM_PIN, motorSpeed);
+  start_motor("open");
+  // wait while door is going to the top
+  while(endstopTopState == LOW) {
+    // When door has left endstop
+    if (endstopBottomState == LOW) {
+      set_motor_speed(motorSpeed);
     }
-    delay(400);
+    set_endstop_states();
+    delay(100);
   }
-  digitalWrite(MOTOR_EN_PIN, LOW);
-  analogWrite(MOTOR_PWM_PIN, 0);
-  digitalWrite(MOTOR_1A_PIN,LOW);
+  stop_motor();
 }
 
+/**
+ * Open the Door
+ */
 void door_close(){
-  digitalWrite(MOTOR_EN_PIN, HIGH);
-  analogWrite(MOTOR_PWM_PIN, 255);
-  digitalWrite(MOTOR_2A_PIN,HIGH);
-  // een while op de deur sensors
-  while(digitalRead(ENDSTOP_TOP_PIN) == LOW) {
-    // als de deur vertrokken is het tempo verlaoge
-    if (digitalRead(ENDSTOP_BOTTOM_PIN) == LOW) {
-      analogWrite(MOTOR_PWM_PIN, motorSpeed);
+  start_motor("close");
+  // wait while door is going to the top
+  while(endstopTopState == LOW) {
+    // When door has left endstop
+    if (endstopBottomState == LOW) {
+      set_motor_speed(motorSpeed);
     }
-    delay(400);
+    set_endstop_states();
+    delay(100);
   }
+  stop_motor();
+}
+
+void start_motor(const char* direction){
+  enable_motor();
+  set_motor_speed(255);
+  set_motor_direction(direction);
+}
+
+void stop_motor() {
+  disable_motor();
+  set_motor_speed(0);
+}
+
+void set_motor_speed(int speed) {
+  analogWrite(MOTOR_PWM_PIN, speed);
+}
+
+void set_motor_direction(const char* direction) {
+  if (direction == "open") {
+    digitalWrite(MOTOR_1A_PIN, HIGH);
+  } else if (direction == "close") {
+    digitalWrite(MOTOR_2A_PIN, HIGH);
+  }
+}
+
+void enable_motor(){
+  digitalWrite(MOTOR_EN_PIN, HIGH);
+}
+
+void disable_motor(){
   digitalWrite(MOTOR_EN_PIN, LOW);
-  analogWrite(MOTOR_PWM_PIN, 0);
+  digitalWrite(MOTOR_1A_PIN,LOW);
   digitalWrite(MOTOR_2A_PIN,LOW);
 }
 
+void set_endstop_states(){
+  endstopBottomState = endstopBottom.read();
+  endstopTopState = endstopTop.read();
+}
+
 void toggle_door(){
-  // zorgt er ook voor dat de deur open of gesloten moet zijn
+  // prevents that you toggle the door when it is moving and also takes care of the correct direction
   if (endstopTopState == LOW) {
     door_close();
   } else if (endstopBottomState == LOW) {
@@ -210,33 +301,33 @@ void setup(){
   setTime(1,1,1,1,1,1);
   // Start up the library
   sensors.begin();
-  Serial.print("Found ");
-  Serial.print(sensors.getDeviceCount(), DEC);
-  Serial.println(" devices.");
+
+  if (DEBUG) {
+    Serial.print("Found ");
+    Serial.print(sensors.getDeviceCount(), DEC);
+    Serial.println(" devices.");
+  }
   
-  if (!sensors.getAddress(insideThermometer, 0)) Serial.println("Unable to find address for Device 0"); 
+  
+  if (!sensors.getAddress(insideThermometer, 0) && DEBUG) Serial.println("Unable to find address for Device 0"); 
   
   
   init_input();
   init_output();
-  init_motor();
   
   Alarm.timerRepeat(30, check);
-  
 }
 
 void loop(){
-  test_light();
-  test_temp();
-  
-  endstopBottomState = endstopBottom.read();
-  endstopTopState = endstopTop.read();
+  test();
+
+  set_endstop_states();
   
   if (testButton.update() && testButton.read() == LOW) {
     toggle_door();
   }
   
-  digitalWrite(CALIBRATION_LED_PIN,calibrationState);
+  digitalWrite(DOOR_THRESHOLD_LED_PIN,doorThresholdState);
   
   Alarm.delay(500);
 }
