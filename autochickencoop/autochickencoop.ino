@@ -18,14 +18,15 @@
 #define TEMPERATURE_THRESHOLD_PIN A3 //potentiometer to set the ventilation threshold
 #define VENTILATION_PIN 2 // Ventilator
 #define LIGHT_PIN 3 // Led string
-#define DOOR_THRESHOLD_LED_PIN 4 //TODO change back to 4 later
+#define DOOR_THRESHOLD_LED_PIN 13 //TODO change back to 4 later
 #define ONE_WIRE_BUS 5 // pin to connect the Dallas oneWire temperature sensor
 #define ENDSTOP_BOTTOM_PIN 8// switch HIGH when active (closed position)
 #define ENDSTOP_TOP_PIN 7 // switch HIGH when active (closed position)
 #define MOTOR_PWM_PIN 6 // PowerFet BUK456 gate to control speed of motor
-#define MOTOR_1A_PIN 9 // 1A of SN754410 
-#define MOTOR_2A_PIN 10 // 2A of SN754410
-#define MOTOR_EN_PIN 11 // EN of SN754410
+#define MOTOR_1A_PIN 9 // 1A of L6203
+#define MOTOR_2A_PIN 10 // 2A of L6203
+#define MOTOR_EN_PIN 11 // EN of L6203
+#define MOTOR_SENSE_PIN A4 // current sense of the L6203
 #define TEST_BUTTON_PIN 12 // pushButton
 
 #define DEBUG true // turn on Serial debug info
@@ -37,7 +38,7 @@ volatile int doorThresholdState;
 volatile int endstopBottomState;
 volatile int endstopTopState;
 int ticker;
-const int transitionTime = 5; // minutes check
+const int transitionTime = 1; // minutes check
 const int motorSpeed = 180; // 
 
 OneWire oneWire(ONE_WIRE_BUS); // initiate  one wire
@@ -45,8 +46,6 @@ DallasTemperature sensors(&oneWire); // make a dallas sensor of the one wire bus
 DeviceAddress insideThermometer; 
 
 Bounce testButton = Bounce();  // initiate debounced button
-Bounce endstopBottom = Bounce();
-Bounce endstopTop = Bounce();
 
 
 /**
@@ -58,11 +57,7 @@ void init_input(){
   pinMode(DOOR_THRESHOLD_PIN, INPUT);
   pinMode(TEMPERATURE_THRESHOLD_PIN, INPUT);
   pinMode(ENDSTOP_BOTTOM_PIN, INPUT_PULLUP);
-  endstopBottom.attach(ENDSTOP_BOTTOM_PIN);
-  endstopBottom.interval(40);
   pinMode(ENDSTOP_TOP_PIN, INPUT_PULLUP);
-  endstopTop.attach(ENDSTOP_TOP_PIN);
-  endstopTop.interval(40);
   pinMode(TEST_BUTTON_PIN, INPUT_PULLUP);
   testButton.attach(TEST_BUTTON_PIN);
   testButton.interval(120);
@@ -101,10 +96,14 @@ void check(){
  */
 void check_light(){
   // when light intensity is below the threshold and door is open, ...
-  if (ldrValue < doorThresholdValue && endstopTopState == HIGH) {
+  if (ldrValue < doorThresholdValue && endstopTopState == HIGH && endstopBottomState == LOW) {
     // when ticker is smaller then the delay add 1 to ticker 
     // and put light on to conditionate the chickens that the door is about to close :-)
     if (ticker < transitionTime*2) {
+      if (DEBUG) {
+        Serial.println("ticker ++ ");
+        Serial.println(ticker);
+      }
       ticker++;
       light_on();
     } else {
@@ -112,8 +111,12 @@ void check_light(){
       light_on();
       ticker = 0;
     }
-  } else if (ldrValue > doorThresholdValue && endstopBottomState == HIGH) {
+  } else if (ldrValue > doorThresholdValue && endstopBottomState == HIGH && endstopTopState == LOW) {
     if (ticker < transitionTime*2) {
+      if (DEBUG) {
+        Serial.println("ticker ++ ");
+        Serial.println(ticker);
+      }
       ticker++;
     } else {
       door_open();
@@ -123,7 +126,11 @@ void check_light(){
   }
   
   // this prevents that a temporary shadow on the sensor would trigger the doors and leave the ticker in a half way state
-  if (ticker > 0 && ldrValue > doorThresholdValue && endstopTopState == HIGH || ticker > 0 && ldrValue < doorThresholdValue && endstopBottomState == HIGH) {
+  if (ticker > 0 && ldrValue > doorThresholdValue && endstopTopState == HIGH && endstopBottomState == LOW || ticker > 0 && ldrValue < doorThresholdValue && endstopBottomState == HIGH && endstopTopState == LOW) {
+    if (DEBUG) {
+        Serial.println("ticker -- ");
+        Serial.println(ticker);
+      }
     ticker--; // or 0?? check beheaviour 
   }
 }
@@ -236,9 +243,9 @@ void door_open(){
 void door_close(){
   start_motor("close");
   // wait while door is going to the top
-  while(endstopTopState == LOW) {
+  while(endstopBottomState == LOW) {
     // When door has left endstop
-    if (endstopBottomState == LOW) {
+    if (endstopTopState == LOW) {
       set_motor_speed(motorSpeed);
     }
     set_endstop_states();
@@ -251,22 +258,25 @@ void door_close(){
  * start the motor
  * @variable : direction "open"/"close"
  */
-void start_motor(const char* direction){
+void start_motor(const char* dir){
   
   if (DEBUG) {
     Serial.print("Going to start the motor. Direction: ");
-    Serial.println(direction);
+    Serial.println(dir);
   }
 
   enable_motor();
   set_motor_speed(255);
-  set_motor_direction(direction);
+  set_motor_direction(dir);
 }
 
 /**
  * stop the motor
  */
 void stop_motor() {
+  if (DEBUG) {
+    Serial.print("Stop the motor ");
+  }
   disable_motor();
   set_motor_speed(0);
 }
@@ -283,10 +293,19 @@ void set_motor_speed(int speed) {
  * set motor direction
  * @variable : direction "open"/"close"
  */
-void set_motor_direction(const char* direction) {
-  if (direction == "open") {
+void set_motor_direction(const char* dir) {
+  if (dir == "open") {
+    
+    if (DEBUG) {
+      Serial.print("dir 1A ");
+    }
+    
     digitalWrite(MOTOR_1A_PIN, HIGH);
-  } else if (direction == "close") {
+  } else if (dir == "close") {
+    
+    if (DEBUG) {
+      Serial.print("dir 2A ");
+    }
     digitalWrite(MOTOR_2A_PIN, HIGH);
   }
 }
@@ -311,8 +330,13 @@ void disable_motor(){
  * what is says 
  */
 void set_endstop_states(){
-  endstopBottomState = endstopBottom.read();
-  endstopTopState = endstopTop.read();
+  endstopBottomState = digitalRead(ENDSTOP_BOTTOM_PIN);
+  endstopTopState = digitalRead(ENDSTOP_TOP_PIN);
+  if (DEBUG) {
+    Serial.print("end stop states ");
+    Serial.print(endstopBottomState);
+    Serial.println(endstopTopState);
+  }
 }
 
 /**
@@ -320,9 +344,9 @@ void set_endstop_states(){
  */
 void toggle_door(){
   // prevents that you toggle the door when it is moving and also takes care of the correct direction
-  if (endstopTopState == LOW) {
+  if (endstopTopState == HIGH && endstopBottomState == LOW ) {
     door_close();
-  } else if (endstopBottomState == LOW) {
+  } else if (endstopTopState == LOW && endstopBottomState == HIGH) {
     door_open();
   }
 }
@@ -350,7 +374,7 @@ void setup(){
   init_input();
   init_output();
   
-  Alarm.timerRepeat(30, check);
+  Alarm.timerRepeat(2, check);
 }
 
 /**
